@@ -49,14 +49,17 @@ void Factory::make_girl(glm::vec3 position, glm::vec3 eulers){
     TransformComponent transform;
     transform.position = position;
     transform.euler = eulers;
-    transformComponents[entities_made++] = transform;
+    transformComponents[entities_made] = transform;
+
+    glm::mat4 preTransform = glm::mat4(1.0f);
+    preTransform = glm::rotate(preTransform, glm::radians(90.0f), {1.0f, 0.0f, 0.0f});
+    preTransform = glm::rotate(preTransform, glm::radians(90.0f), {0.0f, 1.0f, 0.0f});
 
     std::string imagePath = std::string(PROJECT_SOURCE_DIR) + "/modal/girl.obj";
-    std:: cout << imagePath << std::endl;
-    make_obj_mesh(imagePath.c_str());
-    // RenderComponent render = make_cube_mesh({0.25f, 0.25f, 0.25f});
-    // render.material = make_texture("/img/testImage.jpg");
-    // renderComponents[entities_made] = render;
+    RenderComponent render = make_obj_mesh(imagePath.c_str(), preTransform);
+    std::string imagePath2 = std::string(PROJECT_SOURCE_DIR) + "/image/stargirl.png";
+    render.material = make_texture(imagePath2.c_str());
+    renderComponents[entities_made++] = render;
 }
 
 RenderComponent Factory::make_cube_mesh(glm::vec3 size) {
@@ -171,14 +174,16 @@ unsigned int Factory::make_texture(const char* filename) {
     return texture;
 }
 
-void Factory::make_obj_mesh(const char* filename) {
+RenderComponent Factory::make_obj_mesh(const char* filename, glm::mat4 preTransform) {
     std::vector<glm::vec3> v;
     std::vector<glm::vec2> vt;
     std::vector<glm::vec3> vn;
+    std::vector<float> vertices;
 
     size_t vertexCount = 0;
     size_t textCoodCount = 0;
     size_t normalCount = 0;
+    size_t triangleCount = 0;
 
     std::string line;
     std::vector<std::string> words;
@@ -197,39 +202,121 @@ void Factory::make_obj_mesh(const char* filename) {
         else if(!words[0].compare("vn")){
             ++normalCount;
         }
+        else if(!words[0].compare("f")){
+            triangleCount += words.size() - 3;
+        }
     }
     file.close();
 
     v.reserve(vertexCount);
     vt.reserve(textCoodCount);
     vn.reserve(normalCount);
+    vertices.reserve(triangleCount * 3 * 8);
 
     file.open(filename);
     while(std::getline(file, line)){
         words = split(line, " ");
 
         if(!words[0].compare("v")){
-            v.push_back(read_vec3(words));
+            v.push_back(read_vec3(words, preTransform, 1.0f));
         }
         else if(!words[0].compare("vt")){
             vt.push_back(read_vec2(words));
         }
         else if(!words[0].compare("vn")){
-            vn.push_back(read_vec3(words));
+            vn.push_back(read_vec3(words, preTransform, 0.0f));
+        }
+        else if(!words[0].compare("f")){
+            read_face(words, v, vt, vn, vertices);
         }
     }
     file.close();
 
-    std::cout << "Loaded some data" << std::endl; 
-    std::cout << "\tvertices: " << v.size() << std::endl; 
-    std::cout << "\ttext coords: " << vt.size() << std::endl; 
-    std::cout << "\tnormal: " << vn.size() << std::endl; 
+    unsigned int VAO;
+    glGenVertexArrays(1, &VAO);
+    VAOs.push_back(VAO);
+    glBindVertexArray(VAO);
+
+    unsigned int VBO;
+    glGenBuffers(1, &VBO);
+    VBOs.push_back(VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), 
+        vertices.data(), GL_STATIC_DRAW);
+    //position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 32, (void*)0);
+    glEnableVertexAttribArray(0);
+    //texture coordinates
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 32, (void*)12);
+    glEnableVertexAttribArray(1);
+    //normal
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 32, (void*)20);
+    glEnableVertexAttribArray(2);
+
+    RenderComponent record;
+    record.VAO = VAO;
+    record.vertexCount = vertices.size() / 8;
+    return record;
 }
 
 glm::vec2 Factory::read_vec2(std::vector<std::string> words){
      return glm::vec2(std::stof(words[1]), std::stof(words[2]));
 }
 
-glm::vec3 Factory::read_vec3(std::vector<std::string> words){
-     return glm::vec3(std::stof(words[1]), std::stof(words[2]), std::stof(words[3]));
+glm::vec3 Factory::read_vec3(std::vector<std::string> words, glm::mat4 preTransform, float w){
+     return glm::vec3(
+        preTransform * glm::vec4(
+        std::stof(words[1]), 
+        std::stof(words[2]), 
+        std::stof(words[3]), 
+        w)
+    );
 }
+
+void Factory::read_face(
+    std::vector<std::string> words, 
+    std::vector<glm::vec3>& v, 
+    std::vector<glm::vec2>& vt, 
+    std::vector<glm::vec3>& vn, 
+    std::vector<float>& vertices
+){
+    size_t triangleCount = words.size() - 3;
+
+    for(size_t i =0; i<triangleCount; ++i){
+        // read corner 1
+        read_corner(words[1], v, vt, vn, vertices);
+        // read corner 2 + i
+        read_corner(words[2 + i], v, vt, vn, vertices);
+        // read corner 3 + i
+        read_corner(words[3 + i], v, vt, vn, vertices);
+    }
+}
+
+ void Factory::read_corner(
+            std::string description, 
+            std::vector<glm::vec3>& v, 
+            std::vector<glm::vec2>& vt, 
+            std::vector<glm::vec3>& vn, 
+            std::vector<float>& vertices
+){
+
+    std::vector<std::string> v_vt_vn = split(description, "/");
+    
+    //position
+    glm::vec3 pos = v[std::stol(v_vt_vn[0]) - 1];
+    vertices.push_back(pos[0]);
+    vertices.push_back(pos[1]);
+    vertices.push_back(pos[2]);
+
+    //text coord
+    glm::vec2 tex = vt[std::stol(v_vt_vn[1]) - 1];
+    vertices.push_back(tex[0]);
+    vertices.push_back(tex[1]);
+
+    //position
+    glm::vec3 normal = vn[std::stol(v_vt_vn[2]) - 1];
+    vertices.push_back(normal[0]);
+    vertices.push_back(normal[1]);
+    vertices.push_back(normal[2]);
+
+};
